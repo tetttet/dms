@@ -9,6 +9,8 @@ import { PageSkeleton } from "@/components/skeleton";
 import { useDatabaseResource } from "@/hooks/use-database";
 import type { TableSummary } from "@/lib/types";
 import Link from "next/link";
+import { TableDetailPage } from "@/components/table-detail-page";
+import { DatabaseDiagram } from "@/components/database-diagram";
 
 const config = {
   databases: { title: "Databases", description: "Databases visible to the selected PostgreSQL role.", icon: Database },
@@ -40,20 +42,22 @@ export function ResourcePage({ resource }: { resource: Resource }) {
 
 export function TablesPage() {
   const queryClient = useQueryClient();
-  const { data, isPending, error, connectionId, connection, isFetching } = useDatabaseResource<{ rows: TableSummary[] }>("tables");
+  const { data, isPending, error, connectionId, isFetching } = useDatabaseResource<{ rows: TableSummary[] }>("tables");
   const [search, setSearch] = useState("");
   const [schema, setSchema] = useState("public");
+  const [selection, setSelection] = useState<{ connectionId: string; schema: string; table: string } | null>(null);
+  const selected = selection?.connectionId === connectionId ? selection : null;
   const rows = (data?.rows ?? []).filter((table) => `${table.schema}.${table.name}`.toLowerCase().includes(search.toLowerCase()));
   const schemas = [...new Set((data?.rows ?? []).map((table) => table.schema))];
   const visibleSchema = schemas.includes(schema) || !schemas.length ? schema : schemas[0];
   const visibleRows = rows.filter((table) => table.schema === visibleSchema);
-  return <div className="tables-workspace"><div className="tables-browser"><div className="tables-browser-head"><h1>Tables</h1><div className="breadcrumbs"><Link href="/">Overview</Link><span>/</span><span>{connection?.name ?? "Connection"}</span></div></div>
-    <div className="tables-selector"><Database size={17} /><span>{connection?.database ?? "No database"}</span><ChevronDown size={15} /></div>
-    <Link className="tables-schema-link" href="/schemas"><Boxes size={17} /> Schema</Link>
+  return <div className="tables-workspace"><div className="tables-browser"><div className="tables-browser-head"><h1>Tables</h1><div className="breadcrumbs"><Link href="/">Overview</Link><span>/</span><span>Database</span></div></div>
+    <div className="tables-selector"><Database size={17} /><span>Current database</span></div>
+    <button type="button" className={`tables-schema-link tables-diagram-link${!selected ? " active" : ""}`} onClick={() => setSelection(null)}><GitFork size={17} /><span>Database diagram</span><small>{data?.rows.length ?? 0}</small></button>
     <div className="tables-schema-controls"><label className="tables-selector"><Boxes size={17} /><select value={visibleSchema} onChange={(event) => setSchema(event.target.value)}>{(schemas.length ? schemas : ["public"]).map((item) => <option key={item}>{item}</option>)}</select><ChevronDown size={15} /></label><div className="tables-search-row"><label className="search-field"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search..." /></label><button className="button secondary square" title="Refresh tables" onClick={() => queryClient.invalidateQueries({ queryKey: ["database", connectionId, "tables"] })}><RefreshCw className={isFetching ? "spin" : ""} size={16} /></button><Link className="button secondary square" title="Create table" href="/sql?template=create-table">+</Link></div></div>
-    <div className="tables-list">{!connectionId ? <div className="tables-list-empty">No database selected</div> : isPending ? <div className="tables-list-empty">Loading tables...</div> : error ? <div className="tables-list-empty">{error.message}</div> : visibleRows.length ? visibleRows.map((table) => <Link className="tables-list-item" href={`/tables/${encodeURIComponent(table.schema)}/${encodeURIComponent(table.name)}`} key={`${table.schema}.${table.name}`}><Table2 size={16} /><span>{table.name}</span><small>{table.estimatedRows.toLocaleString()}</small></Link>) : <div className="tables-list-empty">{search ? "No matching tables" : `0 tables in ${visibleSchema} schema`}</div>}</div>
+    <div className="tables-list">{!connectionId ? <div className="tables-list-empty">No database selected</div> : isPending ? <div className="tables-list-empty">Loading tables...</div> : error ? <div className="tables-list-empty">{error.message}</div> : visibleRows.length ? visibleRows.map((table) => <button type="button" className={`tables-list-item${selected?.schema === table.schema && selected.table === table.name ? " active" : ""}`} onClick={() => setSelection({ connectionId, schema: table.schema, table: table.name })} key={`${table.schema}.${table.name}`}><Table2 size={16} /><span>{table.name}</span><small>{table.columns} cols</small></button>) : <div className="tables-list-empty">{search ? "No matching tables" : `0 tables in ${visibleSchema} schema`}</div>}</div>
     <div className="tables-browser-foot"><Link href="/settings" title="Settings"><Settings size={16} /></Link><Link href="/sql" title="SQL Editor"><TerminalSquare size={16} /></Link></div>
-  </div><div className="tables-stage">{!connectionId ? <EmptyState title="No database selected" description="Configure a PostgreSQL connection to browse tables." action="Open connections" href="/connections" /> : <Link className="button secondary" href="/sql?template=create-table">Create table</Link>}</div></div>;
+  </div><div className="tables-stage">{!connectionId ? <EmptyState title="No database selected" description="Configure a PostgreSQL connection to browse tables." action="Open connections" href="/connections" /> : selected ? <TableDetailPage key={`${connectionId}:${selected.schema}.${selected.table}`} schema={selected.schema} table={selected.table} inline onSelect={(nextSchema, nextTable) => { setSchema(nextSchema); setSelection({ connectionId, schema: nextSchema, table: nextTable }); }} /> : <div className="database-overview"><DatabaseDiagram onSelect={(nextSchema, nextTable) => { setSchema(nextSchema); setSelection({ connectionId, schema: nextSchema, table: nextTable }); }} /></div>}</div></div>;
 }
 
 function humanize(value: string) { return value.replace(/([a-z])([A-Z])/g, "$1 $2").replaceAll("_", " "); }

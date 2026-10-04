@@ -112,9 +112,49 @@ export async function listTables(connectionId: string): Promise<TableSummary[]> 
         join pg_attribute a on a.attrelid = i.indrelid and a.attnum = x.attnum
         where i.indrelid = c.oid and i.indisprimary), '{}') as "primaryKey"
     from pg_class c join pg_namespace n on n.oid = c.relnamespace
-    where c.relkind in ('r','p') and n.nspname not in ('pg_catalog','information_schema')
+    where c.relkind in ('r','p') and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'
     order by n.nspname, c.relname`);
   return result.rows;
+}
+
+export async function getDatabaseDiagram(connectionId: string) {
+  const pool = getPool(connectionId);
+  const [tables, columns, relationships] = await Promise.all([
+    listTables(connectionId),
+    pool.query<{ schema: string; table: string; name: string; type: string; nullable: boolean; primaryKey: boolean }>(`
+      select n.nspname as schema, c.relname as "table", a.attname as name,
+        format_type(a.atttypid, a.atttypmod) as type, not a.attnotnull as nullable,
+        exists(select 1 from pg_index i where i.indrelid = c.oid and i.indisprimary and a.attnum = any(i.indkey)) as "primaryKey"
+      from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+      where c.relkind in ('r','p') and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'
+      order by n.nspname, c.relname, a.attnum`),
+    pool.query<{ schema: string; table: string; column: string; foreignSchema: string; foreignTable: string; foreignColumn: string; constraint: string }>(`
+      select n.nspname as schema, c.relname as "table", a.attname as "column",
+        fn.nspname as "foreignSchema", fc.relname as "foreignTable", fa.attname as "foreignColumn",
+        con.conname as "constraint"
+      from pg_constraint con
+      join pg_class c on c.oid = con.conrelid join pg_namespace n on n.oid = c.relnamespace
+      join pg_class fc on fc.oid = con.confrelid join pg_namespace fn on fn.oid = fc.relnamespace
+      join lateral unnest(con.conkey, con.confkey) k(attnum, fattnum) on true
+      join pg_attribute a on a.attrelid = c.oid and a.attnum = k.attnum
+      join pg_attribute fa on fa.attrelid = fc.oid and fa.attnum = k.fattnum
+      where con.contype = 'f' and c.relkind in ('r','p') and fc.relkind in ('r','p')
+        and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'
+        and fn.nspname !~ '^pg_' and fn.nspname <> 'information_schema'
+      order by n.nspname, c.relname, con.conname`),
+  ]);
+  const fields = new Map<string, typeof columns.rows>();
+  for (const column of columns.rows) {
+    const key = `${column.schema}\u0000${column.table}`;
+    const group = fields.get(key) ?? [];
+    group.push(column);
+    fields.set(key, group);
+  }
+  return {
+    tables: tables.map((table) => ({ ...table, fields: (fields.get(`${table.schema}\u0000${table.name}`) ?? []).map(({ name, type, nullable, primaryKey }) => ({ name, type, nullable, primaryKey })) })),
+    relationships: relationships.rows,
+  };
 }
 
 export async function getTableDetails(connectionId: string, schema: string, table: string) {
@@ -151,7 +191,7 @@ export async function getResource(connectionId: string, resource: string) {
     extensions: { sql: `select e.extname as name, e.extversion as version, n.nspname as schema, c.comment from pg_extension e join pg_namespace n on n.oid=e.extnamespace left join pg_available_extensions c on c.name=e.extname order by e.extname` },
     roles: { sql: `select rolname as name, rolcanlogin as login, rolsuper as superuser, rolcreatedb as "createDatabase", rolcreaterole as "createRole", rolinherit as inherit, rolconnlimit as "connectionLimit" from pg_roles order by rolname` },
     activity: { sql: `select pid, datname as database, usename as user, application_name as application, state, wait_event_type as "waitType", wait_event as "waitEvent", query_start as "queryStart", extract(epoch from (now()-query_start))::float8 as "durationSeconds", left(query,500) as query from pg_stat_activity where datname=current_database() order by query_start nulls last` },
-    relationships: { sql: `select ns.nspname as schema, cl.relname as table, a.attname as column, fns.nspname as "foreignSchema", fcl.relname as "foreignTable", fa.attname as "foreignColumn", con.conname as constraint from pg_constraint con join pg_class cl on cl.oid=con.conrelid join pg_namespace ns on ns.oid=cl.relnamespace join pg_class fcl on fcl.oid=con.confrelid join pg_namespace fns on fns.oid=fcl.relnamespace join lateral unnest(con.conkey,con.confkey) k(attnum,fattnum) on true join pg_attribute a on a.attrelid=cl.oid and a.attnum=k.attnum join pg_attribute fa on fa.attrelid=fcl.oid and fa.attnum=k.fattnum where con.contype='f' order by ns.nspname,cl.relname` },
+    relationships: { sql: `select ns.nspname as schema, cl.relname as "table", a.attname as "column", fns.nspname as "foreignSchema", fcl.relname as "foreignTable", fa.attname as "foreignColumn", con.conname as "constraint" from pg_constraint con join pg_class cl on cl.oid=con.conrelid join pg_namespace ns on ns.oid=cl.relnamespace join pg_class fcl on fcl.oid=con.confrelid join pg_namespace fns on fns.oid=fcl.relnamespace join lateral unnest(con.conkey,con.confkey) k(attnum,fattnum) on true join pg_attribute a on a.attrelid=cl.oid and a.attnum=k.attnum join pg_attribute fa on fa.attrelid=fcl.oid and fa.attnum=k.fattnum where con.contype='f' order by ns.nspname,cl.relname` },
   };
   const query = queries[resource];
   if (!query) throw new Error("Unsupported database resource.");

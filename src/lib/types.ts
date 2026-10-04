@@ -53,6 +53,30 @@ export type TableSummary = {
   primaryKey: string[];
 };
 
+export type DiagramColumn = {
+  name: string;
+  type: string;
+  nullable: boolean;
+  primaryKey: boolean;
+};
+
+export type DiagramTable = TableSummary & { fields: DiagramColumn[] };
+
+export type DiagramRelationship = {
+  schema: string;
+  table: string;
+  column: string;
+  foreignSchema: string;
+  foreignTable: string;
+  foreignColumn: string;
+  constraint: string;
+};
+
+export type DatabaseDiagram = {
+  tables: DiagramTable[];
+  relationships: DiagramRelationship[];
+};
+
 export type OverviewData = {
   database: string;
   connectionName: string;
@@ -74,4 +98,3 @@ export type OverviewData = {
   connections: { state: string; count: number }[];
   sampledAt: string;
 };
-

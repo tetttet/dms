@@ -90,6 +90,7 @@ export function SqlEditorPage() {
   const [tabs, setTabs] = useState<EditorTab[]>([{ id: "initial-query", title: "Untitled query", sql: searchParams.get("template") === "create-table" ? createTableSql : welcomeSql, saved: false }]);
   const [activeId, setActiveId] = useState(tabs[0].id);
   const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
+  const [recentHistory, setRecentHistory] = useState<QueryHistoryItem[]>([]);
   const [leftOpen, setLeftOpen] = useState(true);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState("");
@@ -102,11 +103,15 @@ export function SqlEditorPage() {
   const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
 
   useEffect(() => {
+    const updateHistory = () => setRecentHistory(readHistory());
     queueMicrotask(() => {
       try { setSavedQueries(JSON.parse(localStorage.getItem("dms-saved-queries") ?? "[]")); } catch { setSavedQueries([]); }
+      updateHistory();
       const reopen = sessionStorage.getItem("dms-reopen-query");
       if (reopen) { setTabs([{ id: crypto.randomUUID(), title: "History query", sql: reopen, saved: false }]); sessionStorage.removeItem("dms-reopen-query"); }
     });
+    window.addEventListener("dms-history-change", updateHistory);
+    return () => window.removeEventListener("dms-history-change", updateHistory);
   }, []);
 
   const updateSql = useCallback((sql: string) => setTabs((items) => items.map((tab) => tab.id === activeId ? { ...tab, sql, saved: false } : tab)), [activeId]);
@@ -168,7 +173,7 @@ export function SqlEditorPage() {
       <div className="query-sidebar-head"><div><strong>Queries</strong><span>{connection?.database ?? "No database"}</span></div><button onClick={() => setLeftOpen(false)}><PanelLeftClose size={15} /></button></div>
       <button className="new-query-button" onClick={newTab}><Plus size={15} /> New query</button>
       <div className="query-side-section"><p>Saved queries <span>{savedQueries.length}</span></p>{savedQueries.map((query) => <button key={query.id} onClick={() => { const tab = { id: query.id, title: query.title, sql: query.sql, saved: true }; setTabs((items) => items.some((item) => item.id === query.id) ? items : [...items, tab]); setActiveId(query.id); }}><FileCode2 size={14} /><span>{query.title}<small>{new Date(query.updatedAt).toLocaleDateString()}</small></span></button>)}{!savedQueries.length && <small className="side-empty">Saved queries stay in this browser.</small>}</div>
-      <div className="query-side-section"><p>Recent <span>{readHistory().length}</span></p>{readHistory().slice(0, 5).map((item: QueryHistoryItem) => <button key={item.id} onClick={() => updateSql(item.sql)}><Clock3 size={14} /><span>{item.sql.replace(/\s+/g, " ").slice(0, 25)}<small>{formatDuration(item.durationMs)}</small></span></button>)}</div>
+      <div className="query-side-section"><p>Recent <span>{recentHistory.length}</span></p>{recentHistory.slice(0, 5).map((item) => <button key={item.id} onClick={() => updateSql(item.sql)}><Clock3 size={14} /><span>{item.sql.replace(/\s+/g, " ").slice(0, 25)}<small>{formatDuration(item.durationMs)}</small></span></button>)}</div>
     </div>
     <div className="editor-main">
       <div className="editor-tabs">{!leftOpen && <button className="reopen-side" onClick={() => setLeftOpen(true)}><ChevronRight size={15} /></button>}{tabs.map((tab) => <button className={tab.id === activeId ? "active" : ""} key={tab.id} onClick={() => setActiveId(tab.id)}><FileCode2 size={13} /><span>{tab.title}{!tab.saved && " •"}</span><X size={12} onClick={(event) => { event.stopPropagation(); closeTab(tab.id); }} /></button>)}<button className="add-tab" onClick={newTab}><Plus size={14} /></button></div>
